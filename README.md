@@ -124,4 +124,6 @@ _Companion adapters (bring an existing tool to a DureClaw fleet):
 [nanobot](https://github.com/DureClaw/nanobot) ·
 [zeroclaw](https://github.com/DureClaw/zeroclaw) ·
 [nullclaw](https://github.com/DureClaw/nullclaw) — each ships a `dureclaw/` bridge.
-edgeclaw is the **native** node, designed bus-first._
+edgeclaw is the **native** node, designed bus-first.
+Sibling native nodes: [webclaw](https://github.com/DureClaw/webclaw) (browser) ·
+[deskclaw](https://github.com/DureClaw/deskclaw) (desktop GUI)._
