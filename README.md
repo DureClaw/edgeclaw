@@ -29,6 +29,30 @@ proven here building for `linux/arm64`, `linux/armv6` (Pi Zero), `linux/riscv64`
 - **LLM, keyless by default:** delegates inference to the **master brain**
   (`BRAIN_URL`/brain/exec) so the edge holds **no API key, no cost**.
   Or use a **local** provider (`OLLAMA_URL`), or wrap **any CLI** (`AGENT_CMD`).
+- **Physical-edge mode** (set any of `EDGE_LED_PIN` / `EDGE_BUZZER_PIN` / `EDGE_AUDIO`):
+  drives a real LED + buzzer + voice on a Raspberry Pi — **"approval = physical result"**.
+  GPIO is pure-Go over the gpiochip char device (no sysfs, no libgpiod, no CGo); off-Pi
+  it degrades to a console mock so the same binary verifies on a laptop.
+
+## Physical-edge mode (Raspberry Pi)
+
+One static binary replaces the old python `pi-agent` (no `pip`, `gpiozero`, or
+`websocket-client`). The guidance WAVs are **embedded in the binary** — nothing else to copy.
+
+```bash
+EDGE_LED_PIN=17 EDGE_BUZZER_PIN=18 EDGE_AUDIO=1 \
+  STATE_SERVER=<bus-host:4000> OAH_SECRET=<token> WORK_KEY=<WK> \
+  AGENT_NAME=executor@pi-cam ./edgeclaw
+```
+
+| Bus event | Physical reaction |
+|-----------|-------------------|
+| join ack | 🟢 `online` voice — line watch started |
+| `task.assign` | 🟡 `suspect` LED blink + voice, returns a defect-suspect `task.result` |
+| `task.result {approved, quarantine}` (broadcast) | 🔴 LED on + 🔔 buzzer + 🔊 `approved` voice |
+| `state.update {decision_<lot>: quarantine}` | same quarantine fire (fallback) |
+
+Verify on a laptop (mock GPIO, silent player): add `EDGE_PLAY_CMD=true`.
 
 ## Install (prebuilt — no toolchain needed)
 
@@ -71,6 +95,9 @@ make all     # → dist/edgeclaw-{linux-amd64,linux-arm64,linux-armv6,linux-risc
 | `BRAIN_URL` / `BRAIN_TOKEN` | master brain endpoint — **keyless LLM** (default path) |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | local LLM instead of the master |
 | `AGENT_CMD` | wrap any external CLI; `{}` ← instruction |
+| `EDGE_LED_PIN` / `EDGE_BUZZER_PIN` | BCM pins → physical-edge mode (gpiochip cdev) |
+| `EDGE_GPIO_CHIP` | gpiochip device (default `gpiochip0`) |
+| `EDGE_AUDIO` / `EDGE_AUDIO_DIR` / `EDGE_PLAY_CMD` | voice guidance (embedded WAVs; override dir/player) |
 
 ## Status
 

@@ -19,8 +19,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -45,6 +48,24 @@ var (
 var refCounter int64
 var joinRefGlobal atomic.Value // string — current connection's join_ref (for pushes on the work topic)
 
+// physical-edge mode (LED/buzzer/audio configured) — a faithful port of pi-agent.
+var (
+	physical bool
+	acts     *Actuators
+	firedMu  sync.Mutex
+	fired    = map[string]bool{} // dedupe quarantine firing per task/decision id
+)
+
+func fireOnce(id string) bool {
+	firedMu.Lock()
+	defer firedMu.Unlock()
+	if id == "" || fired[id] {
+		return false
+	}
+	fired[id] = true
+	return true
+}
+
 func nextRef() string { return fmt.Sprintf("%d", atomic.AddInt64(&refCounter, 1)) }
 
 func joinRef() any {
@@ -56,6 +77,24 @@ func joinRef() any {
 
 func main() {
 	log.SetFlags(log.Ltime)
+
+	// physical-edge mode: LED/buzzer/audio turn edgeclaw into the pi-agent node.
+	physical = actuatorsEnabled()
+	if physical {
+		if os.Getenv("CAPABILITIES") == "" {
+			caps = []string{"edge", "gpio", "led", "camera"}
+			if os.Getenv("EDGE_AUDIO") != "" || os.Getenv("EDGE_AUDIO_DIR") != "" {
+				caps = append(caps, "audio")
+			}
+		}
+		acts = newActuators()
+		log.Printf("[edgeclaw] 🔌 physical-edge mode (approval = physical result)")
+		// reset outputs on Ctrl-C / SIGTERM
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		go func() { <-sig; acts.reset(); log.Printf("[edgeclaw] reset & exit"); os.Exit(0) }()
+	}
+
 	log.Printf("[edgeclaw] %s (role=%s, machine=%s) → bus %s work:%s", agentName, agentRole, machine, stateServer, workKey)
 	for {
 		if err := run(); err != nil {
@@ -101,6 +140,7 @@ func run() error {
 		}
 	}()
 
+	var onlineDone bool
 	for {
 		_, raw, err := c.ReadMessage()
 		if err != nil {
@@ -115,17 +155,82 @@ func run() error {
 		}
 		var event string
 		json.Unmarshal(frame[3], &event)
-		if event != "task.assign" {
+		switch event {
+		case "phx_reply":
+			if physical && !onlineDone {
+				var ref string
+				json.Unmarshal(frame[1], &ref)
+				var rep struct {
+					Status string `json:"status"`
+				}
+				json.Unmarshal(frame[4], &rep)
+				if ref == jr && rep.Status == "ok" {
+					onlineDone = true
+					acts.online()
+				}
+			}
+		case "task.assign":
+			var p taskPayload
+			if json.Unmarshal(frame[4], &p) != nil {
+				continue
+			}
+			if p.To != "" && p.To != agentName && p.To != "broadcast" {
+				continue
+			}
+			go handle(c, p)
+		case "task.result": // physical edge reacts to broadcast approvals
+			if physical {
+				var p resultPayload
+				if json.Unmarshal(frame[4], &p) == nil {
+					onApproved(p)
+				}
+			}
+		case "state.update": // fallback: MES broadcasts decision_<lot>
+			if physical {
+				onState(frame[4])
+			}
+		}
+	}
+}
+
+// resultPayload — the approval signal (broadcast task.result): {approved, action}.
+type resultPayload struct {
+	TaskID   string `json:"task_id"`
+	Approved bool   `json:"approved"`
+	Action   string `json:"action"`
+}
+
+func onApproved(p resultPayload) {
+	if !p.Approved || !fireOnce("res:"+p.TaskID) {
+		return
+	}
+	log.Printf("[edgeclaw] ← task.result APPROVED · action=%s", p.Action)
+	if p.Action == "" || p.Action == "quarantine" || p.Action == "approved" {
+		acts.quarantineFire()
+	}
+}
+
+func onState(raw json.RawMessage) {
+	var m map[string]struct {
+		Status     string `json:"status"`
+		ApprovedBy string `json:"approved_by"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return
+	}
+	for key, v := range m {
+		if !strings.HasPrefix(key, "decision_") || v.Status != "quarantine" {
 			continue
 		}
-		var p taskPayload
-		if json.Unmarshal(frame[4], &p) != nil {
+		if !fireOnce("state:" + key) {
 			continue
 		}
-		if p.To != "" && p.To != agentName && p.To != "broadcast" {
-			continue
+		by := v.ApprovedBy
+		if by == "" {
+			by = "human"
 		}
-		go handle(c, p)
+		log.Printf("[edgeclaw] ← state.update %s: APPROVED by %s", key, by)
+		acts.quarantineFire()
 	}
 }
 
@@ -134,10 +239,15 @@ type taskPayload struct {
 	To           string `json:"to"`
 	From         string `json:"from"`
 	Role         string `json:"role"`
+	Lot          string `json:"lot"`
 	Instructions string `json:"instructions"`
 }
 
 func handle(c *websocket.Conn, p taskPayload) {
+	if physical {
+		handlePhysical(c, p)
+		return
+	}
 	instr := strings.TrimSpace(p.Instructions)
 	if instr == "" {
 		return
@@ -157,6 +267,23 @@ func handle(c *websocket.Conn, p taskPayload) {
 		"status": status, "output": clip(out, 1800), "exit_code": code, "backend": backendLabel(),
 	}})
 	log.Printf("[edgeclaw] result %s: %s (%d chars)", p.TaskID, status, len(out))
+}
+
+// handlePhysical mirrors pi-agent: a defect trigger lights the "suspect" LED + voice
+// and returns an edge-sensor result (no raw image — just identifier + features).
+func handlePhysical(c *websocket.Conn, p taskPayload) {
+	from := p.From
+	if from == "" {
+		from = "orchestrator@sim"
+	}
+	log.Printf("[edgeclaw] ← task.assign (lot %s) → edge camera/LED reaction", p.Lot)
+	acts.suspectBlink()
+	send(c, []any{joinRef(), nextRef(), "work:" + workKey, "task.result", map[string]any{
+		"task_id": p.TaskID, "to": from, "from": agentName,
+		"status": "done", "summary": "edge node: defect suspect captured",
+		"defect_suspect": true, "image": "scratch.jpg", "sensor": "line-cam-03",
+		"backend": "edge-physical",
+	}})
 }
 
 // ── task execution: local hands or LLM ──────────────────────────────────────
@@ -254,6 +381,8 @@ func send(c *websocket.Conn, v []any) {
 
 func backendLabel() string {
 	switch {
+	case physical:
+		return "edge-physical"
 	case brainURL != "":
 		return "brain-remote"
 	case ollamaURL != "":
