@@ -31,11 +31,21 @@ bundled (`bridge/`) as the ultra-portable fallback for boxes without the binary.
   (`BRAIN_URL`/brain/exec) so the edge holds **no API key, no cost**.
   Or use a **local** provider (`OLLAMA_URL`), or wrap **any CLI** (`AGENT_CMD`).
 
+## Install (prebuilt — no toolchain needed)
+
+One line, auto-detects your OS/CPU and downloads the matching binary:
+
+```sh
+curl -fsSL https://github.com/DureClaw/edgeclaw/releases/latest/download/install.sh | sh
+```
+
+Or grab a binary directly from **[Releases](https://github.com/DureClaw/edgeclaw/releases/latest)** —
+win/mac/linux × `amd64` · `arm64` · `armv6`(Pi Zero) · `armv7` · `riscv64` · `loong64` · `mips64le`
+(SHA256SUMS attached). Build from source: `go build -o edgeclaw .` or `make build`.
+
 ## Quick start
 
 ```bash
-go build -o edgeclaw .        # or: make build
-
 STATE_SERVER=<bus-host:4000> OAH_SECRET=<token> WORK_KEY=WK-demo \
   AGENT_NAME=edgeclaw@$(hostname) \
   BRAIN_URL=http://<master>:4111 BRAIN_TOKEN=<tok> \
