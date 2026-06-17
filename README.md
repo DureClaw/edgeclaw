@@ -30,29 +30,39 @@ proven here building for `linux/arm64`, `linux/armv6` (Pi Zero), `linux/riscv64`
   (`BRAIN_URL`/brain/exec) so the edge holds **no API key, no cost**.
   Or use a **local** provider (`OLLAMA_URL`), or wrap **any CLI** (`AGENT_CMD`).
 - **Physical-edge mode** (set any of `EDGE_LED_PIN` / `EDGE_BUZZER_PIN` / `EDGE_AUDIO`):
-  drives a real LED + buzzer + voice on a Raspberry Pi — **"approval = physical result"**.
-  GPIO is pure-Go over the gpiochip char device (no sysfs, no libgpiod, no CGo); off-Pi
-  it degrades to a console mock so the same binary verifies on a laptop.
+  drives real-world actuators — LED, buzzer, **relay / signal tower (Patlite) / andon /
+  PLC trigger**, and **voice over a PA** — so **"approval = physical result"**.
+  GPIO is pure-Go over the gpiochip char device (no sysfs, no libgpiod, no CGo), so it runs on
+  **any Linux box that exposes a `gpiochip`** — Raspberry Pi, NVIDIA Jetson, BeagleBone,
+  Orange Pi / Radxa Rock, industrial x86 gateways/IPCs… Audio works on **any OS**, and where
+  there's no chip it degrades to a console mock so the same binary verifies on a laptop.
 
-## Physical-edge mode (Raspberry Pi)
+## Physical-edge mode (any GPIO/actuator box, not just a Pi)
 
 One static binary replaces the old python `pi-agent` (no `pip`, `gpiozero`, or
-`websocket-client`). The guidance WAVs are **embedded in the binary** — nothing else to copy.
+`websocket-client`) and runs anywhere edgeclaw runs. The guidance WAVs are **embedded in the
+binary** — nothing else to copy. A "BCM pin" is just a `gpiochip` line; pick the chip with
+`EDGE_GPIO_CHIP` (default `gpiochip0`) and the line with `EDGE_LED_PIN` / `EDGE_BUZZER_PIN`.
 
 ```bash
 EDGE_LED_PIN=17 EDGE_BUZZER_PIN=18 EDGE_AUDIO=1 \
   STATE_SERVER=<bus-host:4000> OAH_SECRET=<token> WORK_KEY=<WK> \
-  AGENT_NAME=executor@pi-cam ./edgeclaw
+  AGENT_NAME=executor@line-01 ./edgeclaw
 ```
 
-| Bus event | Physical reaction |
+The line/relay/light/buzzer are interchangeable — the bus events stay the same:
+
+| Bus event | Physical reaction (LED · buzzer · relay/light · PA voice) |
 |-----------|-------------------|
 | join ack | 🟢 `online` voice — line watch started |
-| `task.assign` | 🟡 `suspect` LED blink + voice, returns a defect-suspect `task.result` |
-| `task.result {approved, quarantine}` (broadcast) | 🔴 LED on + 🔔 buzzer + 🔊 `approved` voice |
+| `task.assign` | 🟡 `suspect` blink/pulse + voice, returns a defect-suspect `task.result` |
+| `task.result {approved, quarantine}` (broadcast) | 🔴 actuator on + 🔔 buzzer + 🔊 `approved` voice |
 | `state.update {decision_<lot>: quarantine}` | same quarantine fire (fallback) |
 
-Verify on a laptop (mock GPIO, silent player): add `EDGE_PLAY_CMD=true`.
+Examples — same binary, different boxes: **Raspberry Pi** (line-cam + LED/buzzer),
+**Jetson** (vision node + signal tower over a relay), **industrial gateway/IPC**
+(andon light + PA voice), or **a laptop** for a dry run. Mock GPIO + silent player: add
+`EDGE_PLAY_CMD=true` (and leave the pins unset, or run off-Linux).
 
 ## Install (prebuilt — no toolchain needed)
 
