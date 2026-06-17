@@ -19,8 +19,7 @@ Built on **[DureClaw](https://github.com/DureClaw/dureclaw)** (the Phoenix-Chann
 edgeclaw's goal is **support every OS and every CPU**. Go is the sweet spot:
 **single static binary, no runtime, trivial cross-compile, broad arch coverage** —
 proven here building for `linux/arm64`, `linux/armv6` (Pi Zero), `linux/riscv64`,
-`windows/amd64`, `darwin/*` from one `make all`. A pure-Python stdlib bridge is
-bundled (`bridge/`) as the ultra-portable fallback for boxes without the binary.
+`windows/amd64`, `darwin/*` from one `make all`. One binary, every box — no runtime, no fallback needed.
 
 ## What it does
 
